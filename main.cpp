@@ -10,32 +10,46 @@ void usage() {
 	printf("sample: arp_send wlan0 <192.168.43.117> <192.168.43.1>\n");
 }
 
-int getIPaddr(char *interface, char *ip_addr) {
+void print_mac(u_char *mac_addr) {
+	int i;
+	for(i=0;i<6;i++) {
+		printf("%02x%c",mac_addr[i],i==5?'\n':':');
+	}
+}
+
+int getIPnMACaddr(char *interface, u_char *ip_addr, u_char *mac_addr) {
 	int sock;
 	struct ifreq ifr={0};
 	struct sockaddr_in *sin;
+	u_char *mac = NULL;
 	
 	sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock < 0)
-	{
+	if (sock < 0) {
 		printf("no socket\n");
 		return 0;
 	}
 
 	strcpy(ifr.ifr_name, interface);
-	if (ioctl(sock, SIOCGIFADDR, &ifr)< 0)  
-	{
+	if (ioctl(sock, SIOCGIFADDR, &ifr)< 0) { //get IP address
 		printf("getIP failed\n");
 		//close(sock);
 		return 0;
 	}
-	
 	sin = (struct sockaddr_in*)&ifr.ifr_addr;
-	strcpy(ip_addr, inet_ntoa(sin->sin_addr));
+	strcpy((char *)ip_addr, inet_ntoa(sin->sin_addr));
+	if (ioctl(sock, SIOCGIFHWADDR, &ifr)< 0) { //get MAC address
+		printf("getMAC failed\n");
+		//close(sock);
+		return 0;
+	}
+	mac = (u_char *)ifr.ifr_hwaddr.sa_data;
+	memcpy(mac_addr,mac,6);
 	
 	//close(sock);
 	return 1;
 }
+
+int makeARPpacket(u_char dest_mac,u_char src_mac, u_char 
 
 int main(int argc, char* argv[]) {
   if (argc != 2) {
@@ -52,9 +66,11 @@ int main(int argc, char* argv[]) {
   }
 
   char* dev = argv[1];
-	char IP[20]={0};
-	getIPaddr(dev,IP);
+	u_char IP[20]={0};
+	u_char MAC[10]={0};
+	getIPnMACaddr(dev,IP,MAC);
 	printf("%s\n",IP);
+	print_mac(MAC);
 	return 0;
   char errbuf[PCAP_ERRBUF_SIZE];
   pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
