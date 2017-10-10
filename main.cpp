@@ -74,6 +74,8 @@ int getIPnMACaddr(char *interface, u_char *ip_addr, u_char *mac_addr) {
 	return 1;
 }
 
+enum{D_M=0,S_M=6,E_T=12,H_T=14,P_T=16,HW_S=18,PT_S=19,ARP_OP=20,SEND_MAC=22,SEND_IP=28,TARG_MAC=32,TARG_IP=38};
+
 int makeARPpacket(u_char *packet, u_char *dest_mac,u_char *src_mac, u_char *dest_ip, u_char *src_ip, int opcode) {
 	//ethernet structures : 
 	//dest mac(6B) src mac(6B) ethtype(2B) ->tot. 14B Ethernet header
@@ -100,19 +102,44 @@ int makeARPpacket(u_char *packet, u_char *dest_mac,u_char *src_mac, u_char *dest
 	return st;
 }
 
+int arp_send(u_char *dest_mac, u_char *s_packet, int s_packet_size, char *dev, u_char *my_mac, u_char *my_ip) {
+	char errbuf[PCAP_ERRBUF_SIZE];
+	pcap_t* handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
+	if(handle == NULL) {
+		printf("device %s open error\n",dev);
+		return -1;
+	}
+	
+	if(pcap_sendpacket(handle,s_packet,s_packet_size) == -1) {
+		printf("send packet error\n");
+		pcap_close(handle);
+		return -1;
+	}
+	while(true) {
+		struct pcap_pkthdr* header;
+		const u_char* r_packet;
+		int r_size;
+		int res = pcap_next_ex(handle, &header, &r_packet);
+		if (res == 0) continue;
+		if (res == -1 || res == -2) break;
+		r_size = header->caplen;
+		uint16_t eth_type = r_packet[E_T]<<8+r_packet[E_T+1];
+		if(eth_type != 0x0806) continue;
+		
+		if(memcmp(r_packet+TARG_MAC,my_mac,6) != 0 || memcmp(r_packet+TARG_IP,my_ip,4)!=0) continue;
+		printf("target MAC received\n");
+		memcpy(dest_mac,r_packet+SEND_MAC,6);
+		print_mac(dest_mac);
+		return 0;
+	}
+
+}
+
 int main(int argc, char* argv[]) {
-  if (argc != 4) {
-    char c=0;
-    printf("default interface name : enp0s3, okay? y/n\n");
-    scanf("%c",&c);
-    if(c=='y') {
-      argv[1]="enp0s3";
-    }
-    else {
-      usage();
-      return -1;
-    }
-  }
+	if (argc != 4) {
+		usage();
+		return -1;
+	}
 
 	char* dev = argv[1];
 	u_char srcIP[4], srcMAC[6];
@@ -130,6 +157,11 @@ int main(int argc, char* argv[]) {
 	int packet_size = makeARPpacket(packet,sendMAC,srcMAC,sendIP,srcIP,1);
 	printf("%d\n",packet_size);
 	print_packet(packet,packet_size);	
+	if(arp_send(sendMAC,packet,packet_size,dev,srcMAC,srcIP)) {
+		printf("receive packet error\n");
+		return 0;
+	}
+	
 	return 0;
 
   char errbuf[PCAP_ERRBUF_SIZE];

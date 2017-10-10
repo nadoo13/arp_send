@@ -1,6 +1,6 @@
 all : arp_send
 
-arp_send: main.o
+arp_send: clean main.o
 	g++ -g -o arp_send main.o -lpcap
 
 main.o:
